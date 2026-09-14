@@ -189,15 +189,19 @@ while running:
             })
 
    
-    two_hand_pinch = (
-        len(hands_data) == 2 
-        and hands_data[0]["pinching"] 
-        and hands_data[1]["pinching"]
-    )
+    pinching_hands = [h for h in hands_data if h["pinching"]]
+
+    # 2. Release constructs if a hand stops pinching
+    for hand_id in list(dragged_by_hand.keys()):
+        if not any(h["id"] == hand_id for h in pinching_hands):
+            del dragged_by_hand[hand_id]
+
+    # 3. Two-handed stretch / resize logic
+    two_hand_pinch = len(pinching_hands) == 2
 
     if two_hand_pinch:
-        p1 = hands_data[0]["pos"]
-        p2 = hands_data[1]["pos"]
+        p1 = pinching_hands[0]["pos"]
+        p2 = pinching_hands[1]["pos"]
         current_hands_dist = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
         midpoint = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
 
@@ -206,7 +210,15 @@ while running:
         if scaling_construct is None:
             for c in reversed(constructs):
                 d_mid = math.hypot(c.x - midpoint[0], c.y - midpoint[1])
-                if d_mid < c.size + 80:
+                grabbed_stretch = False
+                if c.shape_type == "freedraw":
+                    if c.bbox.collidepoint(midpoint):
+                        grabbed_stretch = True
+                else:
+                    if d_mid < c.size + 80:
+                        grabbed_stretch = True
+
+                if grabbed_stretch:
                     scaling_construct = c
                     initial_pinch_dist = max(current_hands_dist, 10.0)
                     initial_construct_size = c.size
@@ -215,100 +227,93 @@ while running:
         if scaling_construct:
             ratio = current_hands_dist / initial_pinch_dist
             scaling_construct.size = max(20.0, min(400.0, initial_construct_size * ratio))
-            scaling_construct.x = midpoint[0]
-            scaling_construct.y = midpoint[1]
+            scaling_construct.set_position(midpoint[0], midpoint[1])
             scaling_construct.angle = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
 
         dragged_by_hand.clear()
+
     else:
         scaling_construct = None
         initial_pinch_dist = None
 
-       
-        for hand in hands_data:
+        # 4. Process pinching hands (Dragging or Free Draw)
+        for hand in pinching_hands:
             hid = hand["id"]
             hx, hy = hand["pos"]
-            pinching = hand["pinching"]
             fingers = hand["fingers"]
 
-            
-            if not pinching:
-                
-                if hid in active_freedraw_by_hand:
-                    del active_freedraw_by_hand[hid]
-                    
-                
+            if fingers == 1:
+                # 1 Finger pinch = Free Draw
                 if hid in dragged_by_hand:
                     del dragged_by_hand[hid]
 
-                if hid not in gesture_timers:
-                    gesture_timers[hid] = 0
-                    last_gestures[hid] = fingers
-
-                if last_gestures[hid] == fingers:
-                    gesture_timers[hid] += 1
+                if hid not in active_freedraw_by_hand:
+                    new_draw = Construct("freedraw", hx, hy)
+                    constructs.append(new_draw)
+                    active_freedraw_by_hand[hid] = new_draw
+                    new_draw.add_point(hx, hy)
                 else:
-                    last_gestures[hid] = fingers
-                    gesture_timers[hid] = 0
+                    active_freedraw_by_hand[hid].add_point(hx, hy)
 
-                
-                if gesture_timers[hid] == 15:
-                    if fingers == 0:
-                        constructs.clear()  # Fist clears
-                   
-                    elif fingers == 2:
-                        constructs.append(Construct("rectangle", hx, hy))
-                    elif fingers == 3:
-                        constructs.append(Construct("circle", hx, hy))
-                    elif fingers == 4:
-                        constructs.append(Construct("triangle", hx, hy)) 
+            else:
+                # Other finger pinch = Grab & Move
+                if hid in active_freedraw_by_hand:
+                    del active_freedraw_by_hand[hid]
 
-            
-            elif pinching:
-                
-                if fingers == 1:
-                    if hid not in active_freedraw_by_hand:
-                        
-                        new_draw = Construct("freedraw", hx, hy)
-                        constructs.append(new_draw)
-                        active_freedraw_by_hand[hid] = new_draw
-                        new_draw.add_point(hx, hy)
-                    else:
-                        
-                        active_freedraw_by_hand[hid].add_point(hx, hy)
-                        
-                
-                else:
-                    
-                    if hid in active_freedraw_by_hand:
-                        del active_freedraw_by_hand[hid]
+                if hid not in dragged_by_hand:
+                    for c in reversed(constructs):
+                        if c not in dragged_by_hand.values():
+                            grabbed = False
+                            if c.shape_type == "freedraw":
+                                if c.bbox.inflate(30, 30).collidepoint(hx, hy):
+                                    grabbed = True
+                            else:
+                                if math.hypot(c.x - hx, c.y - hy) < c.size + 25:
+                                    grabbed = True
 
-                    if hid not in dragged_by_hand:
-                        # Find near shape to grab
-                        for c in reversed(constructs):
-                            if c not in dragged_by_hand.values():
-                                grabbed = False
-                                
-                                
-                                if c.shape_type == "freedraw":
-                                    if c.bbox.inflate(30, 30).collidepoint(hx, hy):
-                                        grabbed = True
-                                
-                                else:
-                                    if math.hypot(c.x - hx, c.y - hy) < c.size + 25:
-                                        grabbed = True
-                                
-                                if grabbed:
-                                    dragged_by_hand[hid] = c
-                                    break
+                            if grabbed:
+                                dragged_by_hand[hid] = c
+                                break
 
-                    if hid in dragged_by_hand:
-                        
-                        dragged_by_hand[hid].set_position(hx, hy)
-                        dragged_by_hand[hid].angle += 0.05
+                if hid in dragged_by_hand:
+                    dragged_by_hand[hid].set_position(hx, hy)
+                    dragged_by_hand[hid].angle += 0.05
 
+        # 5. Process non-pinching hands (Shape Spawning Gestures)
+        non_pinching_hands = [h for h in hands_data if not h["pinching"]]
+        for hand in non_pinching_hands:
+            hid = hand["id"]
+            hx, hy = hand["pos"]
+            fingers = hand["fingers"]
+
+            if hid in active_freedraw_by_hand:
+                del active_freedraw_by_hand[hid]
+            if hid in dragged_by_hand:
+                del dragged_by_hand[hid]
+
+            if hid not in gesture_timers:
+                gesture_timers[hid] = 0
+                last_gestures[hid] = fingers
+
+            if last_gestures[hid] == fingers:
+                gesture_timers[hid] += 1
+            else:
+                last_gestures[hid] = fingers
+                gesture_timers[hid] = 0
+
+            # Hold pose for ~0.25s (15 frames) to trigger action
+            if gesture_timers[hid] == 15:
+                if fingers == 0:
+                    constructs.clear()
+                elif fingers == 2:
+                    constructs.append(Construct("rectangle", hx, hy))
+                elif fingers == 3:
+                    constructs.append(Construct("circle", hx, hy))
+                elif fingers == 4:
+                    constructs.append(Construct("triangle", hx, hy))
 
     active_manipulations = list(dragged_by_hand.values())
+    active_manipulations.extend(list(active_freedraw_by_hand.values()))
     if scaling_construct:
         active_manipulations.append(scaling_construct)
 
