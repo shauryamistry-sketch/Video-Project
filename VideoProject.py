@@ -222,6 +222,7 @@ was_pinching = {}
 
 scaling_construct = None
 initial_pinch_dist = None
+initial_pinch_midpoint = None
 initial_construct_size = None
 initial_construct_points = None
 selected_construct = None
@@ -236,6 +237,10 @@ while running:
             running = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_c:
             constructs.clear()
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_d:
+            if selected_construct is not None:
+                selected_construct = selected_construct.duplicate()
+                constructs.append(selected_construct)
 
     ret, frame = cap.read()
     if not ret:
@@ -365,21 +370,32 @@ while running:
                     del active_freedraw_by_hand[hid]
 
                 if hid not in dragged_by_hand:
-                    for c in reversed(constructs):
+                    candidates = []
+
+                    for c in constructs:
                         if c in dragged_by_hand.values():
                             continue
-                        grabbed = False
                         if c.shape_type == "freedraw":
-                            if c.bbox.inflate(30, 30).collidepoint(hx, hy):
-                                grabbed = True
-                        else:
-                            if math.hypot(c.x - hx, c.y - hy) < c.size + 25:
-                                grabbed = True
+                            if c.bbox.inflate(20,20).collidepoint(hx, hy):
+                                dist = math.hypot(c.x - hx, c.y - hy)
+                            else:
+                                continue
 
-                        if grabbed:
-                            dragged_by_hand[hid] = c
-                            selected_construct = c
-                            break
+                        else:
+                            dist = math.hypot(c.x - hx, c.y - hy)
+                            if dist > c.size+15:
+                                continue
+
+                        candidates.append((dist, c))
+
+                    
+                    if candidates:
+                        c = min(candidates, key=lambda item: item[0])[1]
+                        dragged_by_hand[hid] = c
+                        selected_construct = c
+                        c.vx = c.vy = 0
+                        last_hand_positions[hid] = (hx, hy)
+                        break
 
                 if hid in dragged_by_hand:
                     dragged = dragged_by_hand[hid]
@@ -408,6 +424,7 @@ while running:
                 del active_freedraw_by_hand[hid]
             if hid in dragged_by_hand:
                 del dragged_by_hand[hid]
+                last_hand_positions.pop(hid, None)
 
             if was_pinching.get(hid, False):
                 gesture_timers[hid] = 0
@@ -487,7 +504,7 @@ while running:
         "Pinch + 1 finger   : Free Draw",
         "Pinch (closed)     : Move Shape",
         "Both Hands Pinch   : Stretch / Rotate",
-        "[C]  Clear   [ESC] Quit",
+        "[D] duplicate [C]  Clear   [ESC] Quit",
     ]
     for idx, text in enumerate(hud):
         screen.blit(font.render(text, True, (150, 255, 180)), (20, 20 + idx * 22))
